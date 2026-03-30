@@ -47,15 +47,15 @@ st.markdown("---")
 def load_model():
     return pipeline(
         "sentiment-analysis",
-        model="cardiffnlp/twitter-roberta-base-sentiment-latest",
+        model="distilbert-base-uncased-finetuned-sst-2-english",
         truncation=True,
         max_length=512,
-        device=-1  # Use CPU for cloud deployment
+        top_k=1
     )
 
 # ── Preprocessing ────────────────────────────────────────────
 NEGATION = re.compile(
-    r"\b(not|no|never|cannot|can't|won't|don't|doesn't|didn't|isn't|wasn't|aren't|weren't)\s+(\w+)",
+    r"\b(not|no|never|cannot|can't|won't|don't|doesn't|didn't|isn't|wasn't)\s+(\w+)",
     re.IGNORECASE
 )
 
@@ -69,18 +69,19 @@ def preprocess(text):
     text = re.sub(r"\s+", " ", text).strip()
     return text[:512]
 
-# ── Map 3-class output ──────────────────────────────────────
+# ── Map 2-class model → 3 classes ───────────────────────────
 def map_label(label, score):
-    """Map RoBERTa's 3-class output (LABEL_0=negative, LABEL_1=neutral, LABEL_2=positive)"""
-    if label == "LABEL_0":
-        return "negative"
-    elif label == "LABEL_1":
+    """
+    DistilBERT is binary (POSITIVE / NEGATIVE).
+    We derive NEUTRAL when the model is uncertain (score between 0.55 and 0.75).
+    """
+    label = label.upper()
+    if score < 0.75:
         return "neutral"
-    else:
-        return "positive"
+    return "positive" if label == "POSITIVE" else "negative"
 
 # ── Classify ─────────────────────────────────────────────────
-def classify(texts, model, batch_size=16):
+def classify(texts, model, batch_size=32):
     results = []
     progress = st.progress(0, text="Analysing reviews...")
     total = len(texts)
@@ -126,6 +127,7 @@ with st.sidebar:
 
     if uploaded:
         try:
+            # Try comma separator first, then tab (for FastText-style files)
             try:
                 df_raw = pd.read_csv(uploaded)
             except Exception:
@@ -154,11 +156,13 @@ with st.sidebar:
 # MAIN — Results
 # ════════════════════════════════════════════════════════════
 if not uploaded:
+    # Landing state
     st.info("👈  Upload a CSV file in the sidebar to get started.")
     st.markdown("""
     **Accepted formats:**
     - CSV with a text column (e.g. `review`, `text`, `comment`)
-    
+    - Amazon FastText format (`__label__1 review text`)
+
     **What you'll get:**
     - Sentiment label per review (positive / neutral / negative)
     - Confidence score per prediction
@@ -185,9 +189,9 @@ elif run:
 
     # Counts
     counts = df["sentiment"].value_counts()
-    total = len(df)
+    total  = len(df)
     pos_pct = round(counts.get("positive", 0) / total * 100, 1)
-    neu_pct = round(counts.get("neutral", 0) / total * 100, 1)
+    neu_pct = round(counts.get("neutral",  0) / total * 100, 1)
     neg_pct = round(counts.get("negative", 0) / total * 100, 1)
 
     # ── KPI row ──────────────────────────────────────────────
@@ -195,7 +199,7 @@ elif run:
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total reviews", f"{total:,}")
     c2.metric("Positive", f"{pos_pct}%", delta=None)
-    c3.metric("Neutral", f"{neu_pct}%")
+    c3.metric("Neutral",  f"{neu_pct}%")
     c4.metric("Negative", f"{neg_pct}%")
 
     st.markdown("---")
@@ -208,7 +212,7 @@ elif run:
     with col_a:
         st.markdown("**Sentiment distribution**")
         fig1, ax1 = plt.subplots(figsize=(4, 4))
-        sizes = [counts.get(l, 0) for l in ["positive", "neutral", "negative"]]
+        sizes  = [counts.get(l, 0) for l in ["positive", "neutral", "negative"]]
         labels = [f"Positive\n{pos_pct}%", f"Neutral\n{neu_pct}%", f"Negative\n{neg_pct}%"]
         colors = ["#22c55e", "#9ca3af", "#ef4444"]
         ax1.pie(sizes, labels=labels, colors=colors, startangle=140,
@@ -257,6 +261,7 @@ elif run:
     # ── Per-review table ─────────────────────────────────────
     st.subheader("🔍 Per-review predictions")
 
+    # Colour-coded sentiment column
     def colour_sentiment(val):
         colours = {"positive": "#dcfce7", "neutral": "#fef9c3", "negative": "#fee2e2"}
         return f"background-color: {colours.get(val, 'white')}"
@@ -276,6 +281,7 @@ elif run:
 
     dl1, dl2 = st.columns(2)
 
+    # CSV download
     csv_bytes = df[["text", "sentiment", "confidence"]].to_csv(index=False).encode()
     dl1.download_button(
         "📄 Download predictions CSV",
@@ -284,6 +290,7 @@ elif run:
         mime="text/csv"
     )
 
+    # Summary report download
     neg_kw = top_keywords(neg_texts if neg_texts else [], n=5)
     report = "\n".join([
         "SENTIMENT ANALYSIS SUMMARY REPORT",
@@ -298,7 +305,7 @@ elif run:
         "Top 5 Negative Keywords:",
     ] + [f"  {w:20s}: {c}" for w, c in neg_kw] + [
         "",
-        "Model: cardiffnlp/twitter-roberta-base-sentiment-latest",
+        "Model: distilbert-base-uncased-finetuned-sst-2-english",
         "Tool : Sentiment Analysis Tool — DLBDSEAIS02"
     ])
 
@@ -308,3 +315,6 @@ elif run:
         file_name="summary_report.txt",
         mime="text/plain"
     )
+
+elif uploaded and not run:
+    st.info("👈 Click **▶ Analyse** in the sidebar when you're ready.")
