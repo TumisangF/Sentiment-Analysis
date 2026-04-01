@@ -58,6 +58,13 @@ st.markdown("""
         border-radius: 8px;
         padding: 0.5rem 2rem;
     }
+    .error-box {
+        background-color: #fee2e2;
+        border-left: 5px solid #ef4444;
+        padding: 1rem;
+        border-radius: 8px;
+        margin: 1rem 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -84,18 +91,19 @@ def load_emotion_model():
             st.info("✅ Loading custom emotion model...")
             tokenizer = AutoTokenizer.from_pretrained(str(model_path))
             model = AutoModelForSequenceClassification.from_pretrained(str(model_path))
+            st.success("✅ Custom model loaded successfully!")
         else:
             st.warning("⚠️ Custom model not found. Using fallback model...")
             model_name = "j-hartmann/emotion-english-distilroberta-base"
             tokenizer = AutoTokenizer.from_pretrained(model_name)
             model = AutoModelForSequenceClassification.from_pretrained(model_name)
+            st.info("✅ Fallback model loaded successfully!")
         
         # Move to appropriate device
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model.to(device)
         model.eval()
         
-        st.success(f"🎯 Model loaded successfully on {device.upper()}!")
         return model, tokenizer, id2label, device, labels
         
     except Exception as e:
@@ -104,6 +112,36 @@ def load_emotion_model():
 
 # Load model
 model, tokenizer, id2label, device, labels = load_emotion_model()
+
+# Check if model loaded successfully
+if model is None:
+    st.markdown("""
+    <div class="error-box">
+        <strong>⚠️ Model Failed to Load</strong><br>
+        The emotion analysis model could not be loaded. This might be because:
+        <ul>
+            <li>The model files are missing or corrupt</li>
+            <li>There's a memory issue on the server</li>
+            <li>There's a compatibility issue with the model files</li>
+        </ul>
+        Please check the logs or contact support.
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Display debug info
+    with st.expander("🔧 Debug Information"):
+        st.write("**Model Path Check:**")
+        current_dir = Path(__file__).parent
+        model_path = current_dir / "saved_model"
+        st.write(f"Expected model path: {model_path}")
+        st.write(f"Path exists: {model_path.exists()}")
+        
+        if model_path.exists():
+            st.write("**Files in saved_model:**")
+            for file in model_path.iterdir():
+                st.write(f"- {file.name} ({file.stat().st_size / 1024:.1f} KB)")
+    
+    st.stop()
 
 # ── Text cleaning ───────────────────────────────────
 def clean_text(text):
@@ -211,11 +249,6 @@ EMOTION_EMOJIS = {
 # MAIN APP
 # ════════════════════════════════════════════════════════════
 
-# Display model status
-if model is None:
-    st.error("🚨 Model failed to load. Please check the logs.")
-    st.stop()
-
 # Sidebar
 with st.sidebar:
     st.header("📁 Upload your data")
@@ -250,11 +283,14 @@ with st.sidebar:
     
     st.markdown("---")
     st.markdown("🤖 **Model Information**")
+    
+    # Safe device display
+    device_str = str(device).upper() if device else "CPU"
     st.info(f"""
     - **Model:** Fine-tuned Emotion Classifier
     - **Accuracy:** 82.37% on validation set
     - **Classes:** 6 emotions
-    - **Device:** {device.upper()}
+    - **Device:** {device_str}
     """)
     
     run = st.button("▶ Analyse Emotions", type="primary", disabled=(df_raw is None or col_name is None))
@@ -283,7 +319,7 @@ if not uploaded:
     | Recall | 82.37% |
     """)
 
-elif run:
+elif run and model is not None:
     # Prepare data
     df = df_raw[[col_name]].rename(columns={col_name: "text"}).copy()
     if len(df) > sample_size:
@@ -310,7 +346,7 @@ elif run:
     for i, emotion in enumerate(labels):
         col = cols[i % 3]
         count = counts.get(emotion, 0)
-        percentage = round(count / total * 100, 1)
+        percentage = round(count / total * 100, 1) if total > 0 else 0
         emoji = EMOTION_EMOJIS.get(emotion, "")
         
         with col:
@@ -325,77 +361,81 @@ elif run:
     st.markdown("---")
     
     # Charts
-    st.subheader("📊 Emotion Visualization")
-    col_a, col_b = st.columns(2)
-    
-    with col_a:
-        st.markdown("**Emotion distribution**")
-        fig, ax = plt.subplots(figsize=(5, 4))
-        counts_list = [counts.get(e, 0) for e in labels]
-        colors_list = [EMOTION_COLORS.get(e, "#9ca3af") for e in labels]
+    if total > 0:
+        st.subheader("📊 Emotion Visualization")
+        col_a, col_b = st.columns(2)
         
-        bars = ax.bar(labels, counts_list, color=colors_list, alpha=0.8)
-        ax.set_ylabel("Number of reviews")
-        ax.tick_params(axis='x', rotation=45)
-        ax.spines[["top", "right"]].set_visible(False)
-        
-        for bar, count in zip(bars, counts_list):
-            if count > 0:
-                ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1,
-                        str(count), ha='center', va='bottom', fontsize=9)
-        
-        plt.tight_layout()
-        st.pyplot(fig)
-        plt.close(fig)
-    
-    with col_b:
-        st.markdown("**Confidence by emotion**")
-        fig, ax = plt.subplots(figsize=(5, 4))
-        
-        boxplot_data = []
-        boxplot_labels = []
-        for emotion in labels:
-            emotion_conf = df[df["emotion"] == emotion]["confidence"]
-            if len(emotion_conf) > 0:
-                boxplot_data.append(emotion_conf)
-                boxplot_labels.append(emotion)
-        
-        if boxplot_data:
-            bp = ax.boxplot(boxplot_data, labels=boxplot_labels, patch_artist=True)
-            for patch, emotion in zip(bp['boxes'], boxplot_labels):
-                patch.set_facecolor(EMOTION_COLORS.get(emotion, "#9ca3af"))
-                patch.set_alpha(0.7)
+        with col_a:
+            st.markdown("**Emotion distribution**")
+            fig, ax = plt.subplots(figsize=(5, 4))
+            counts_list = [counts.get(e, 0) for e in labels]
+            colors_list = [EMOTION_COLORS.get(e, "#9ca3af") for e in labels]
             
-            ax.set_ylabel("Confidence score")
-            ax.set_ylim(0, 1)
+            bars = ax.bar(labels, counts_list, color=colors_list, alpha=0.8)
+            ax.set_ylabel("Number of reviews")
             ax.tick_params(axis='x', rotation=45)
             ax.spines[["top", "right"]].set_visible(False)
+            
+            for bar, count in zip(bars, counts_list):
+                if count > 0:
+                    ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1,
+                            str(count), ha='center', va='bottom', fontsize=9)
+            
+            plt.tight_layout()
+            st.pyplot(fig)
+            plt.close(fig)
         
-        plt.tight_layout()
-        st.pyplot(fig)
-        plt.close(fig)
-    
-    st.markdown("---")
-    
-    # Results table
-    st.subheader("🔍 Detailed emotion analysis")
-    
-    display_df = df[["text", "emotion", "confidence"]].copy()
-    display_df["confidence"] = (display_df["confidence"] * 100).round(1).astype(str) + "%"
-    display_df["emotion"] = display_df["emotion"].apply(
-        lambda x: f"{EMOTION_EMOJIS.get(x, '')} {x.title()}"
-    )
-    
-    st.dataframe(display_df, use_container_width=True, height=400)
-    
-    # Download
-    st.markdown("---")
-    st.subheader("⬇️ Download results")
-    
-    csv_bytes = df[["text", "emotion", "confidence"]].to_csv(index=False).encode()
-    st.download_button(
-        "📄 Download predictions CSV",
-        data=csv_bytes,
-        file_name="emotion_predictions.csv",
-        mime="text/csv"
-    )
+        with col_b:
+            st.markdown("**Confidence by emotion**")
+            fig, ax = plt.subplots(figsize=(5, 4))
+            
+            boxplot_data = []
+            boxplot_labels = []
+            for emotion in labels:
+                emotion_conf = df[df["emotion"] == emotion]["confidence"]
+                if len(emotion_conf) > 0:
+                    boxplot_data.append(emotion_conf)
+                    boxplot_labels.append(emotion)
+            
+            if boxplot_data:
+                bp = ax.boxplot(boxplot_data, labels=boxplot_labels, patch_artist=True)
+                for patch, emotion in zip(bp['boxes'], boxplot_labels):
+                    patch.set_facecolor(EMOTION_COLORS.get(emotion, "#9ca3af"))
+                    patch.set_alpha(0.7)
+                
+                ax.set_ylabel("Confidence score")
+                ax.set_ylim(0, 1)
+                ax.tick_params(axis='x', rotation=45)
+                ax.spines[["top", "right"]].set_visible(False)
+            
+            plt.tight_layout()
+            st.pyplot(fig)
+            plt.close(fig)
+        
+        st.markdown("---")
+        
+        # Results table
+        st.subheader("🔍 Detailed emotion analysis")
+        
+        display_df = df[["text", "emotion", "confidence"]].copy()
+        display_df["confidence"] = (display_df["confidence"] * 100).round(1).astype(str) + "%"
+        display_df["emotion"] = display_df["emotion"].apply(
+            lambda x: f"{EMOTION_EMOJIS.get(x, '')} {x.title()}"
+        )
+        
+        st.dataframe(display_df, use_container_width=True, height=400)
+        
+        # Download
+        st.markdown("---")
+        st.subheader("⬇️ Download results")
+        
+        csv_bytes = df[["text", "emotion", "confidence"]].to_csv(index=False).encode()
+        st.download_button(
+            "📄 Download predictions CSV",
+            data=csv_bytes,
+            file_name="emotion_predictions.csv",
+            mime="text/csv"
+        )
+
+elif run and model is None:
+    st.error("❌ Cannot analyze emotions: Model failed to load. Please check the logs.")
