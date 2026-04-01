@@ -69,7 +69,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── Header ──────────────────────────────────────────────────
-st.title("😊 Emotion Analysis Tool")
+st.title("Sentiment Analysis Tool")
 st.markdown("**Advanced customer emotion detection** — Upload customer reviews and get detailed emotion analysis (Joy, Anger, Sadness, Fear, Surprise, Neutral)")
 st.markdown("---")
 
