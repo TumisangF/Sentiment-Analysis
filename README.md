@@ -1,13 +1,10 @@
 ---
-title: Sentiment Analysis Tool
-emoji: 📉
+title: Sentiment Analysis App
+emoji: 😊
 colorFrom: blue
-colorTo: red
-sdk: gradio
-sdk_version: 6.10.0
+colorTo: green
+sdk: streamlit
+sdk_version: "1.31.1"
 app_file: app.py
 pinned: false
-license: mit
 ---
-
-Check out the configuration reference at https://huggingface.co/docs/hub/spaces-config-reference
