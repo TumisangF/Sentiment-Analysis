@@ -10,10 +10,22 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
 from pathlib import Path
 import os
+import sys
+import logging
+
+# Suppress warnings to clean up logs
+logging.getLogger('streamlit').setLevel(logging.ERROR)
+logging.getLogger('transformers').setLevel(logging.ERROR)
+logging.getLogger('torch').setLevel(logging.ERROR)
+
+# IMPORTANT: Disable Streamlit's file watcher to prevent restart loops
+os.environ["STREAMLIT_SERVER_WATCH_FILES"] = "false"
+os.environ["STREAMLIT_SERVER_RUN_ON_SAVE"] = "false"
+os.environ["STREAMLIT_SERVER_HEADLESS"] = "true"
 
 # ── Page config ────────────────────────────────────────────
 st.set_page_config(
-    page_title="Emotion Analysis Tool",
+    page_title="Sentiment Analysis Tool",
     page_icon="😊",
     layout="wide"
 )
@@ -50,48 +62,48 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── Header ──────────────────────────────────────────────────
-st.title("Sentiment Analysis Tool")
+st.title("😊 Emotion Analysis Tool")
 st.markdown("**Advanced customer emotion detection** — Upload customer reviews and get detailed emotion analysis (Joy, Anger, Sadness, Fear, Surprise, Neutral)")
 st.markdown("---")
 
-# ── Load model from local directory ───────────────────────────────
-@st.cache_resource(show_spinner="Loading emotion analysis model...")
+# ── Load model (cached and with error handling) ─────────────
+@st.cache_resource(show_spinner="Loading emotion analysis model...", ttl=3600)
 def load_emotion_model():
-    """
-    Load your fine-tuned emotion model from the saved_model directory
-    """
-    # Define emotion labels
-    labels = ["joy", "anger", "sadness", "fear", "surprise", "neutral"]
-    id2label = {i: label for i, label in enumerate(labels)}
-    
-    # Get the directory where this script is located
-    current_dir = Path(__file__).parent
-    model_path = current_dir / "saved_model"
-    
-    # Check if model exists
-    if model_path.exists():
-        st.success(f"✅ Loading custom emotion model...")
-        try:
+    """Load your fine-tuned emotion model"""
+    try:
+        # Define emotion labels
+        labels = ["joy", "anger", "sadness", "fear", "surprise", "neutral"]
+        id2label = {i: label for i, label in enumerate(labels)}
+        
+        # Get the directory where this script is located
+        current_dir = Path(__file__).parent
+        model_path = current_dir / "saved_model"
+        
+        # Check if model exists
+        if model_path.exists():
+            st.info("✅ Loading custom emotion model...")
             tokenizer = AutoTokenizer.from_pretrained(str(model_path))
             model = AutoModelForSequenceClassification.from_pretrained(str(model_path))
-        except Exception as e:
-            st.error(f"Error loading model: {e}")
-            st.info("Falling back to pre-trained emotion model...")
+        else:
+            st.warning("⚠️ Custom model not found. Using fallback model...")
             model_name = "j-hartmann/emotion-english-distilroberta-base"
             tokenizer = AutoTokenizer.from_pretrained(model_name)
             model = AutoModelForSequenceClassification.from_pretrained(model_name)
-    else:
-        st.warning(f"Custom model not found. Using pre-trained model...")
-        model_name = "j-hartmann/emotion-english-distilroberta-base"
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        model = AutoModelForSequenceClassification.from_pretrained(model_name)
-    
-    # Move to appropriate device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
-    model.eval()
-    
-    return model, tokenizer, id2label, device, labels
+        
+        # Move to appropriate device
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model.to(device)
+        model.eval()
+        
+        st.success(f"🎯 Model loaded successfully on {device.upper()}!")
+        return model, tokenizer, id2label, device, labels
+        
+    except Exception as e:
+        st.error(f"❌ Error loading model: {str(e)}")
+        return None, None, None, None, None
+
+# Load model
+model, tokenizer, id2label, device, labels = load_emotion_model()
 
 # ── Text cleaning ───────────────────────────────────
 def clean_text(text):
@@ -102,16 +114,19 @@ def clean_text(text):
     text = text.lower()
     text = re.sub(r'http\S+|www\S+|https\S+', '', text)
     text = re.sub(r'<.*?>', '', text)
-    text = re.sub(r"[^a-z0-9\s\.\,\!\\?\\-]", ' ', text)
+    text = re.sub(r'[^\w\s\.\,\!\\?\\-]', ' ', text)
     text = re.sub(r'\s+', ' ', text).strip()
     
     return text[:512]
 
 # ── Emotion prediction ──────────────────────────────────────
-def predict_emotion(texts, model, tokenizer, id2label, device, batch_size=32):
+def predict_emotion(texts, model, tokenizer, id2label, device, batch_size=16):
     """Predict emotions for a list of texts"""
+    if model is None:
+        return [{"predicted_emotion": "error", "confidence": 0.0, "all_emotions": {}} for _ in texts]
+    
     results = []
-    progress = st.progress(0, text="Analysing emotions...")
+    progress_bar = st.progress(0, text="Analysing emotions...")
     total = len(texts)
     
     for i in range(0, total, batch_size):
@@ -149,10 +164,10 @@ def predict_emotion(texts, model, tokenizer, id2label, device, batch_size=32):
                 "all_emotions": all_emotions
             })
         
-        progress.progress(min((i + batch_size) / total, 1.0), 
-                         text=f"Analysing emotions... {min(i+batch_size, total)}/{total}")
+        progress_bar.progress(min((i + batch_size) / total, 1.0), 
+                              text=f"Analysing emotions... {min(i+batch_size, total)}/{total}")
     
-    progress.empty()
+    progress_bar.empty()
     return results
 
 # ── Keyword extraction ───────────────────────────
@@ -196,10 +211,12 @@ EMOTION_EMOJIS = {
 # MAIN APP
 # ════════════════════════════════════════════════════════════
 
-# Load model
-model, tokenizer, id2label, device, labels = load_emotion_model()
+# Display model status
+if model is None:
+    st.error("🚨 Model failed to load. Please check the logs.")
+    st.stop()
 
-# Display model info
+# Sidebar
 with st.sidebar:
     st.header("📁 Upload your data")
     st.markdown("Upload a CSV file with a column containing review text.")
@@ -216,7 +233,7 @@ with st.sidebar:
                 uploaded.seek(0)
                 df_raw = pd.read_csv(uploaded, sep="\t", header=None, names=["text"])
             
-            st.success(f"Loaded {len(df_raw):,} rows")
+            st.success(f"✅ Loaded {len(df_raw):,} rows")
             st.dataframe(df_raw.head(3), use_container_width=True)
             
             col_name = st.selectbox(
@@ -237,6 +254,7 @@ with st.sidebar:
     - **Model:** Fine-tuned Emotion Classifier
     - **Accuracy:** 82.37% on validation set
     - **Classes:** 6 emotions
+    - **Device:** {device.upper()}
     """)
     
     run = st.button("▶ Analyse Emotions", type="primary", disabled=(df_raw is None or col_name is None))
@@ -255,6 +273,14 @@ if not uploaded:
     ### 📁 File Format:
     - CSV file with at least one text column
     - Supports both comma and tab-separated files
+    
+    ### 📊 Model Performance:
+    | Metric | Score |
+    |--------|-------|
+    | Accuracy | 82.37% |
+    | F1 Score | 82.31% |
+    | Precision | 83.03% |
+    | Recall | 82.37% |
     """)
 
 elif run:
